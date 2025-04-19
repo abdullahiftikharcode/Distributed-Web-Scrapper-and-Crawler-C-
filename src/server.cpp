@@ -1316,18 +1316,48 @@ private:
             size_t bodyStart = request.find("\r\n\r\n");
             if (bodyStart != std::string::npos) {
                 std::string body = request.substr(bodyStart + 4);
-                std::string url = body;
                 
-                // Set the seed URL
-                if (urlQueueManager) {
-                    urlQueueManager->setSeedUrl(url);
-                    response = "{ \"status\": \"success\", \"message\": \"Seed URL set successfully\" }";
+                // Try to find URL in different formats
+                std::string url;
+                
+                // Check for JSON format: {"url": "..."}
+                size_t urlStart = body.find("\"url\"");
+                if (urlStart != std::string::npos) {
+                    urlStart = body.find("\"", urlStart + 5);
+                    if (urlStart != std::string::npos) {
+                        size_t urlEnd = body.find("\"", urlStart + 1);
+                        if (urlEnd != std::string::npos) {
+                            url = body.substr(urlStart + 1, urlEnd - urlStart - 1);
+                        }
+                    }
+                }
+                
+                // If not found in JSON, try plain text
+                if (url.empty()) {
+                    // Remove any whitespace, quotes, or brackets
+                    body.erase(std::remove_if(body.begin(), body.end(), 
+                        [](char c) { return c == ' ' || c == '\n' || c == '\r' || c == '"' || c == '{' || c == '}'; }), 
+                        body.end());
+                    if (!body.empty()) {
+                        url = body;
+                    }
+                }
+                
+                if (!url.empty()) {
+                    // Set the seed URL
+                    if (urlQueueManager) {
+                        urlQueueManager->setSeedUrl(url);
+                        response = "{ \"status\": \"success\", \"message\": \"Seed URL set successfully\", \"url\": \"" + url + "\" }";
+                    } else {
+                        response = "{ \"error\": \"URL queue manager not initialized\" }";
+                        statusCode = 500;
+                    }
                 } else {
-                    response = "{ \"error\": \"URL queue manager not initialized\" }";
-                    statusCode = 500;
+                    response = "{ \"error\": \"No URL provided in request body\" }";
+                    statusCode = 400;
                 }
             } else {
-                response = "{ \"error\": \"No URL provided in request body\" }";
+                response = "{ \"error\": \"No request body found\" }";
                 statusCode = 400;
             }
             contentType = "application/json";
