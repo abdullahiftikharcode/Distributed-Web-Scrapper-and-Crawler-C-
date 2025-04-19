@@ -157,8 +157,8 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
     std::string request = request_stream.str();
 
     // Send the request
-    int result = send(sock, request.c_str(), (int)request.length(), 0);
-    if (result == SOCKET_ERROR) {
+    int send_result = send(sock, request.c_str(), (int)request.length(), 0);
+    if (send_result == SOCKET_ERROR) {
         #ifdef _WIN32
         std::cerr << "Error sending request: " << WSAGetLastError() << std::endl;
         #else

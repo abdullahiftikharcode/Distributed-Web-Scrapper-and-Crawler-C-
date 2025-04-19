@@ -3,7 +3,36 @@
 #include "../include/HtmlParser.h"
 #include <iostream>
 #include <chrono>
-#include <conio.h>  // For _kbhit()
+
+#ifdef _WIN32
+#include <conio.h>  // For _kbhit() on Windows
+#else
+#include <sys/select.h>
+#include <termios.h>
+#include <unistd.h>
+
+// Linux implementation of _kbhit()
+int _kbhit() {
+    struct timeval tv = { 0L, 0L };
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(STDIN_FILENO, &fds);
+    return select(1, &fds, NULL, NULL, &tv) > 0;
+}
+
+// Optional: Linux implementation of _getch() if needed
+int _getch() {
+    struct termios oldt, newt;
+    int ch;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    ch = getchar();
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    return ch;
+}
+#endif
 
 std::vector<Book> crawl_website(const std::string& hostname, const std::string& start_path, int max_pages) {
     std::vector<Book> all_books;

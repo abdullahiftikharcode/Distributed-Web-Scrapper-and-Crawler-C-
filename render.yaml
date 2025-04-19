@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: web-scraper
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    region: singapore
+    plan: free
+    numInstances: 1
+    envVars:
+      - key: DEBUG
+        value: "true"
+    ports:
+      - port: 9001
+        name: http
+      - port: 9000
+        name: worker 

@@ -90,7 +90,8 @@ std::vector<Book> deduplicate_books(const std::vector<Book>& books) {
     return unique_books;
 }
 
-int main(int argc, char* argv[]) {
+// The main scraper functionality
+int run_cli_scraper(int argc, char* argv[]) {
     const std::string hostname = "books.toscrape.com";
     const std::string start_path = "/catalogue/page-1.html";
     int max_pages = 0; // Default to crawl all pages
@@ -154,4 +155,9 @@ int main(int argc, char* argv[]) {
     save_to_csv(books, "books.csv");
     
     return 0;
+}
+
+// Main entry point
+int main(int argc, char* argv[]) {
+    return run_cli_scraper(argc, argv);
 } 

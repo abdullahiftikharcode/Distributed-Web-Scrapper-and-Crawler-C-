@@ -60,7 +60,7 @@ public:
                 unsigned char uc = static_cast<unsigned char>(c);
                 
                 // If the first character is a currency symbol, skip it
-                if (!foundDigit && (c == '£' || c == '$' || c == '€' || uc > 127)) {
+                if (!foundDigit && (c == L'£' || c == L'$' || c == L'€' || uc > 127)) {
                     continue;
                 }
                 

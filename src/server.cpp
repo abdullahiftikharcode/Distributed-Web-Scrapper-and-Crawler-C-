@@ -14,6 +14,8 @@
 #ifndef _CRT_SECURE_NO_WARNINGS
 #  define _CRT_SECURE_NO_WARNINGS
 #endif
+#else
+#include <signal.h>
 #endif
 
 
@@ -39,10 +41,11 @@
 #include <fstream>
 #include <set>
 #include "../include/Item.h"
+#include <cmath>  // Add this include for log function
 
 // Hide the std::log function from cmath to avoid conflicts
 namespace std {
-    using ::log;
+    using ::log;  // This line can be removed since we're including cmath
 }
 
 // Port to listen on
@@ -82,6 +85,7 @@ struct WorkerInfo {
 
 // Global flag to indicate server shutdown
 std::atomic<bool> serverShutdown(false);
+std::atomic<bool> shutdownRequested(false);
 
 // Worker registry to track registered workers
 class WorkerRegistry {
@@ -1093,30 +1097,46 @@ void displayStatus() {
     }
 }
 
+// Signal handler function
+void signalHandler(int signum) {
+    if (signum == SIGINT || signum == SIGTERM) {
+        logMessage("Received shutdown signal. Press Ctrl+C again to force shutdown...");
+        if (shutdownRequested.load()) {
+            logMessage("Force shutdown initiated...");
+            exit(0);
+        }
+        shutdownRequested.store(true);
+        serverShutdown.store(true);
+    }
+}
+
 // Thread function to check for shutdown request
 void checkShutdown() {
-    logMessage("Press Enter to shutdown the server and all workers...");
+    logMessage("Server is running. Press Ctrl+C to shutdown...");
     
-    // Wait for Enter key press
-    std::cin.get();
-    
-    // Signal shutdown
-    serverShutdown.store(true);
-    logMessage("Shutdown initiated. Waiting for workers to terminate...");
-    
-    // Save collected books
-    if (urlQueueManager != nullptr) {
-        logMessage("Saving collected books to books.csv...");
-        urlQueueManager->saveCollectedBooks("books.csv");
-        logMessage("Book data has been saved.");
-    } else {
-        logMessage("WARNING: URL queue manager was null, could not save books!");
+    while (!serverShutdown.load()) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     
-    // Give workers time to receive shutdown signal
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-    
-    logMessage("Server shutdown complete.");
+    // Only proceed with shutdown if it was requested
+    if (shutdownRequested.load()) {
+        logMessage("Shutdown initiated. Waiting for workers to terminate...");
+        
+        // Save collected data
+        if (urlQueueManager != nullptr) {
+            logMessage("Saving collected data...");
+            urlQueueManager->saveCollectedBooks("books.csv");
+            urlQueueManager->saveCollectedItems("items.csv");
+            logMessage("Data has been saved.");
+        } else {
+            logMessage("WARNING: URL queue manager was null, could not save data!");
+        }
+        
+        // Give workers time to receive shutdown signal
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+        
+        logMessage("Server shutdown complete.");
+    }
 }
 
 // Broadcast shutdown to all connected workers
@@ -1275,166 +1295,40 @@ private:
         std::string request(buffer);
         std::string response;
         std::string contentType = "text/plain";
+        int statusCode = 200;
         
         if (request.find("GET /api/status") != std::string::npos) {
             // Return crawler status
             std::string status = "{ \"running\": " + std::string(crawlerEnabled.load() ? "true" : "false") + ", ";
-            status += "\"queue_size\": " + std::to_string(urlQueueManager->getQueueSize()) + ", ";
-            status += "\"processed_urls\": " + std::to_string(urlQueueManager->getProcessedCount()) + ", ";
-            status += "\"books_found\": " + std::to_string(urlQueueManager->getBookCount()) + ", ";
-            status += "\"items_found\": " + std::to_string(urlQueueManager->getItemCount()) + ", ";
+            status += "\"queue_size\": " + std::to_string(urlQueueManager ? urlQueueManager->getQueueSize() : 0) + ", ";
+            status += "\"processed_urls\": " + std::to_string(urlQueueManager ? urlQueueManager->getProcessedCount() : 0) + ", ";
+            status += "\"books_found\": " + std::to_string(urlQueueManager ? urlQueueManager->getBookCount() : 0) + ", ";
+            status += "\"items_found\": " + std::to_string(urlQueueManager ? urlQueueManager->getItemCount() : 0) + ", ";
             status += "\"workers\": " + std::to_string(workerRegistry.getActiveWorkerCount()) + ", ";
-            status += "\"seed_url\": \"" + urlQueueManager->getSeedUrl() + "\", ";
-            status += "\"item_type\": \"" + urlQueueManager->getItemTypeString() + "\" }";
+            status += "\"seed_url\": \"" + (urlQueueManager ? urlQueueManager->getSeedUrl() : "") + "\", ";
+            status += "\"item_type\": \"" + (urlQueueManager ? urlQueueManager->getItemTypeString() : "UNKNOWN") + "\", ";
+            status += "\"server_status\": \"running\" }";
             response = status;
             contentType = "application/json";
-        } 
-        else if (request.find("GET /api/stats") != std::string::npos) {
-            // Return item statistics
-            auto stats = urlQueueManager->getItemStats();
-            
-            std::string statsJson = "{ ";
-            size_t count = 0;
-            for (const auto& pair : stats) {
-                statsJson += "\"" + pair.first + "\": \"" + pair.second + "\"";
-                if (++count < stats.size()) {
-                    statsJson += ", ";
-                }
-            }
-            statsJson += " }";
-            
-            response = statsJson;
-            contentType = "application/json";
-        }
-        else if (request.find("GET /api/items") != std::string::npos) {
-            // Return collected items
-            std::vector<Item> items = urlQueueManager->getCollectedItems();
-            
-            std::string itemsJson = "{ \"items\": [";
-            
-            for (size_t i = 0; i < items.size(); ++i) {
-                const auto& item = items[i];
-                
-                itemsJson += "{ \"id\": \"" + item.id + "\", ";
-                itemsJson += "\"type\": \"" + item.typeToString() + "\", ";
-                itemsJson += "\"title\": \"" + item.title + "\", ";
-                itemsJson += "\"url\": \"" + item.url + "\", ";
-                itemsJson += "\"price\": " + std::to_string(item.price) + ", ";
-                itemsJson += "\"rating\": " + std::to_string(item.rating) + ", ";
-                itemsJson += "\"category\": \"" + item.category + "\", ";
-                
-                // Add fields
-                itemsJson += "\"fields\": {";
-                size_t fieldCount = 0;
-                for (const auto& field : item.fields) {
-                    itemsJson += "\"" + field.first + "\": \"" + field.second + "\"";
-                    if (++fieldCount < item.fields.size()) {
-                        itemsJson += ", ";
-                    }
-                }
-                itemsJson += "}";
-                
-                // Add comma if not the last item
-                if (i < items.size() - 1) {
-                    itemsJson += "}, ";
-                } else {
-                    itemsJson += "}";
-                }
-            }
-            
-            itemsJson += "]}";
-            
-            response = itemsJson;
-            contentType = "application/json";
-        }
-        else if (request.find("POST /api/start") != std::string::npos) {
-            // Start the crawler
-            
-            // Clear any previous state first
-            if (urlQueueManager != nullptr) {
-                urlQueueManager->resetCollectedData();
-            }
-            
-            // Set crawler to enabled AFTER reset to ensure workers can get URLs
-            crawlerEnabled.store(true);
-            
-            // Ensure the queue has the seed URL
-            if (urlQueueManager != nullptr) {
-                std::string seedUrl = urlQueueManager->getSeedUrl();
-                
-                // Make sure the seed URL is removed from processed URLs and added to the queue
-                urlQueueManager->addSeedUrl(seedUrl);
-                
-                // Log detailed information
-                size_t queueSize = urlQueueManager->getQueueSize();
-                logMessage("Starting crawler with seed URL: " + seedUrl);
-                logMessage("Queue size after adding seed URL: " + std::to_string(queueSize));
-            }
-            
-            response = "{ \"status\": \"started\", \"data_reset\": true, \"will_process_seed\": true }";
-            contentType = "application/json";
-            logMessage("Crawler started manually via UI with fresh data. Seed URL will be processed.");
-        } 
-        else if (request.find("POST /api/stop") != std::string::npos) {
-            // Stop the crawler
-            crawlerEnabled.store(false);
-            
-            // When stopping, don't clear any URLs - we want to preserve state
-            // Just log that we're stopping
-            logMessage("Crawler stopped via API. State preserved for restart.");
-            
-            response = "{ \"status\": \"stopped\", \"can_restart\": true }";
-            contentType = "application/json";
-        } 
-        else if (request.find("POST /api/seed") != std::string::npos) {
-            // Change the seed URL
-            size_t contentPos = request.find("\r\n\r\n");
-            if (contentPos != std::string::npos) {
-                std::string body = request.substr(contentPos + 4);
-                
-                // Parse the JSON body (simple parsing)
-                size_t urlStart = body.find("\"url\":\"");
-                if (urlStart != std::string::npos) {
-                    urlStart += 7; // Skip "url":"
-                    size_t urlEnd = body.find("\"", urlStart);
-                    if (urlEnd != std::string::npos) {
-                        std::string newSeedUrl = body.substr(urlStart, urlEnd - urlStart);
-                        urlQueueManager->setSeedUrl(newSeedUrl);
-                        
-                        response = "{ \"status\": \"seed_updated\", \"seed_url\": \"" + newSeedUrl + "\", \"item_type\": \"" + urlQueueManager->getItemTypeString() + "\", \"crawler_running\": " + (crawlerEnabled.load() ? "true" : "false") + " }";
-                        contentType = "application/json";
-                        logMessage("Seed URL changed to " + newSeedUrl + " via API. Crawler must be started manually.");
-                    }
-                }
-            }
-            
-            if (response.empty()) {
-                response = "{ \"error\": \"Invalid request format\" }";
-                contentType = "application/json";
-            }
-        } 
-        else if (request.find("POST /api/save") != std::string::npos) {
-            // Save the collected items
-            urlQueueManager->saveCollectedBooks("books.csv");
-            urlQueueManager->saveCollectedItems("items.csv");
-            response = "{ \"status\": \"saved\", \"books\": " + std::to_string(urlQueueManager->getBookCount()) + 
-                     ", \"items\": " + std::to_string(urlQueueManager->getItemCount()) + " }";
-            contentType = "application/json";
-            logMessage("Items saved via API");
         } 
         else if (request.find("GET /") != std::string::npos || request.find("GET /index.html") != std::string::npos) {
             // Serve the frontend HTML
             response = getHtmlFrontend();
             contentType = "text/html";
+            if (response.find("Error: Frontend file not found") != std::string::npos) {
+                statusCode = 500;
+            }
         } 
         else {
             // Unknown endpoint
             response = "{ \"error\": \"Unknown endpoint\" }";
             contentType = "application/json";
+            statusCode = 404;
         }
         
         // Send HTTP response
-        std::string httpResponse = "HTTP/1.1 200 OK\r\n";
+        std::string httpResponse = "HTTP/1.1 " + std::to_string(statusCode) + " " + 
+                                 (statusCode == 200 ? "OK" : (statusCode == 404 ? "Not Found" : "Internal Server Error")) + "\r\n";
         httpResponse += "Content-Type: " + contentType + "\r\n";
         httpResponse += "Content-Length: " + std::to_string(response.length()) + "\r\n";
         httpResponse += "Access-Control-Allow-Origin: *\r\n";  // CORS header
@@ -1472,6 +1366,23 @@ int main() {
         return 1;
     }
     #endif
+    
+    // Set up signal handlers
+    #ifdef _WIN32
+    signal(SIGINT, signalHandler);
+    signal(SIGTERM, signalHandler);
+    #else
+    struct sigaction sa;
+    sa.sa_handler = signalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+    #endif
+    
+    // Start the shutdown monitor thread
+    std::thread shutdownThread(checkShutdown);
+    shutdownThread.detach();
     
     // Create socket
     SOCKET serverSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -1527,10 +1438,6 @@ int main() {
     // Start the status display thread
     std::thread statusThread(displayStatus);
     statusThread.detach();
-    
-    // Start the shutdown check thread
-    std::thread shutdownThread(checkShutdown);
-    shutdownThread.detach();
     
     // Start the API server
     apiHandler = new ApiHandler();
