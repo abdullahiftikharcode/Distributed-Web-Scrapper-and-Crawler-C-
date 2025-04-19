@@ -10,8 +10,12 @@ services:
     envVars:
       - key: DEBUG
         value: "true"
+      - key: PORT
+        value: "9001"
     ports:
       - port: 9001
-        name: http
+        protocol: http
       - port: 9000
-        name: worker 
+        protocol: tcp
+    domains:
+      - distributed-web-scrapper-and-crawler-c.onrender.com 
