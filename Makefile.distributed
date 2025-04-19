@@ -1,0 +1,77 @@
+# Makefile for Distributed Web Scraper
+
+# Compiler and flags
+CXX = g++
+CXXFLAGS = -std=c++11 -Wall -Wextra
+LDFLAGS = 
+
+# Platform-specific settings
+ifeq ($(OS),Windows_NT)
+    # Windows-specific settings
+    LDFLAGS += -lws2_32 -lstdc++
+    BIN_EXT = .exe
+    # Check for MinGW-w64 which has better C++11 support
+    MINGW_W64 := $(shell $(CXX) -v 2>&1 | grep -c "mingw-w64")
+    ifeq ($(MINGW_W64),0)
+        $(warning Warning: You may need MinGW-w64 for full C++11/threading support)
+    endif
+    # Add pthread for MinGW
+    CXXFLAGS += -pthread
+else
+    # Unix/Linux/Mac settings
+    LDFLAGS += -pthread
+    BIN_EXT = 
+endif
+
+# Directories
+SRC_DIR = src
+OBJ_DIR = obj
+BIN_DIR = bin
+INCLUDE_DIR = include
+
+# Source files (excluding main.cpp, as we have server.cpp and worker.cpp instead)
+COMMON_SRCS = $(SRC_DIR)/HttpClient.cpp \
+              $(SRC_DIR)/HtmlParser.cpp \
+              $(SRC_DIR)/Crawler.cpp
+
+# Object files
+COMMON_OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(COMMON_SRCS))
+SERVER_OBJ = $(OBJ_DIR)/server.o
+WORKER_OBJ = $(OBJ_DIR)/worker.o
+
+# Target executables
+SERVER_TARGET = $(BIN_DIR)/server$(BIN_EXT)
+WORKER_TARGET = $(BIN_DIR)/worker$(BIN_EXT)
+
+# Default target
+all: dirs $(SERVER_TARGET) $(WORKER_TARGET)
+
+# Create necessary directories
+dirs:
+	@mkdir -p $(BIN_DIR) $(OBJ_DIR)
+
+# Build rules for common object files
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+	$(CXX) $(CXXFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+
+# Build rules for server and worker object files
+$(SERVER_OBJ): $(SRC_DIR)/server.cpp
+	$(CXX) $(CXXFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+
+$(WORKER_OBJ): $(SRC_DIR)/worker.cpp
+	$(CXX) $(CXXFLAGS) -I$(INCLUDE_DIR) -c $< -o $@
+
+# Link the server executable
+$(SERVER_TARGET): $(SERVER_OBJ)
+	$(CXX) $^ -o $@ $(LDFLAGS)
+
+# Link the worker executable
+$(WORKER_TARGET): $(WORKER_OBJ) $(COMMON_OBJS)
+	$(CXX) $^ -o $@ $(LDFLAGS)
+
+# Clean up
+clean:
+	rm -rf $(OBJ_DIR)/*.o $(SERVER_TARGET) $(WORKER_TARGET)
+
+# Phony targets
+.PHONY: all clean dirs 

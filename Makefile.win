@@ -1,0 +1,43 @@
+CXX = g++
+CXXFLAGS = -std=c++11 -Wall -Wextra -I./include
+LDFLAGS = -lwsock32 -lws2_32
+
+SRC_DIR = src
+OBJ_DIR = obj
+BIN_DIR = bin
+
+SRC_FILES = $(wildcard $(SRC_DIR)/*.cpp)
+OBJ_FILES = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(SRC_FILES))
+EXECUTABLE = $(BIN_DIR)/webscraper
+
+# Exclude test_socket.cpp from regular build
+MAIN_SRC_FILES = $(filter-out $(SRC_DIR)/test_socket.cpp, $(SRC_FILES))
+MAIN_OBJ_FILES = $(patsubst $(SRC_DIR)/%.cpp,$(OBJ_DIR)/%.o,$(MAIN_SRC_FILES))
+
+all: directories $(EXECUTABLE)
+
+directories:
+	mkdir -p $(OBJ_DIR) $(BIN_DIR)
+
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(EXECUTABLE): $(MAIN_OBJ_FILES)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+# Socket test build target
+test_socket: directories $(BIN_DIR)/test_socket
+
+$(BIN_DIR)/test_socket: $(SRC_DIR)/test_socket.cpp
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
+
+clean:
+	rm -rf $(OBJ_DIR) $(BIN_DIR)
+
+run: all
+	$(EXECUTABLE)
+
+run_test: test_socket
+	$(BIN_DIR)/test_socket
+
+.PHONY: all clean run directories test_socket run_test 
