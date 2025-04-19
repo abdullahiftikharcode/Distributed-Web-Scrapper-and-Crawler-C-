@@ -25,6 +25,7 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
 
     SOCKET sock = INVALID_SOCKET;
     std::string response;
+    int result = 0;  // Declare result variable at the start
 
     // First try using getaddrinfo if available
     #ifdef _WIN32
@@ -47,7 +48,7 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
             hints.ai_socktype = SOCK_STREAM;
             hints.ai_protocol = IPPROTO_TCP;
             
-            int result = (*pGetAddrInfo)(hostname.c_str(), "80", &hints, &addr_info);
+            result = (*pGetAddrInfo)(hostname.c_str(), "80", &hints, &addr_info);
             if (result == 0 && addr_info != nullptr) {
                 // Create socket
                 sock = socket(addr_info->ai_family, addr_info->ai_socktype, addr_info->ai_protocol);
@@ -74,7 +75,7 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
     
-    int result = getaddrinfo(hostname.c_str(), "80", &hints, &addr_info);
+    result = getaddrinfo(hostname.c_str(), "80", &hints, &addr_info);
     if (result == 0 && addr_info != nullptr) {
         // Create socket
         sock = socket(addr_info->ai_family, addr_info->ai_socktype, addr_info->ai_protocol);
@@ -124,7 +125,8 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
         }
         
         // Connect to the server
-        if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+        result = connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
+        if (result == SOCKET_ERROR) {
             std::cerr << "Error connecting to server in fallback method" << std::endl;
             CLOSE_SOCKET(sock);
             SOCKET_CLEANUP;
@@ -174,13 +176,14 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
     char buffer[buffer_size];
 
     // Loop until connection is closed or error occurs
-    do {
+    while (true) {
         result = recv(sock, buffer, buffer_size - 1, 0);
         if (result > 0) {
             buffer[result] = '\0';  // Null-terminate the received data
             response += buffer;
         } else if (result == 0) {
             // Connection closed
+            break;
         } else {
             #ifdef _WIN32
             std::cerr << "Error receiving data: " << WSAGetLastError() << std::endl;
@@ -191,7 +194,7 @@ std::string http_get(const std::string& hostname, const std::string& resource_pa
             SOCKET_CLEANUP;
             return "";
         }
-    } while (result > 0);
+    }
 
     // Clean up
     CLOSE_SOCKET(sock);

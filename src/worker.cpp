@@ -91,7 +91,7 @@ std::atomic<bool> mainThreadCommunicating(false);
 std::string getBaseUrl(const std::string& hostname);
 std::string getUrlFromServer(SOCKET serverSocket);
 bool sendProcessedUrlToServer(SOCKET serverSocket, const std::string& url, const Book& book, const std::vector<std::string>& links);
-SOCKET connectToServer(const std::string& serverIP, int serverPort);
+SOCKET connectToServer(const std::string& serverHost, int serverPort);
 void progressReporter(SOCKET serverSocket);
 bool sendProgressUpdate(SOCKET serverSocket, int count);
 bool should_stop_predicate();
@@ -114,65 +114,69 @@ void log(const std::string& message) {
 }
 
 // Connect to the server and register
-SOCKET connectToServer(const std::string& serverIP, int serverPort) {
+SOCKET connectToServer(const std::string& serverHost, int serverPort) {
     #ifdef _WIN32
     // Initialize Winsock on Windows
     WSADATA wsaData;
-    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (result != 0) {
-        std::cerr << "WSAStartup failed: " << result << std::endl;
+    int wsaResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (wsaResult != 0) {
+        std::cerr << "WSAStartup failed: " << wsaResult << std::endl;
         return INVALID_SOCKET;
     }
     #endif
     
     // Create socket
-    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    SOCKET sock = INVALID_SOCKET;
+    struct addrinfo *addrResult = NULL, *ptr = NULL, hints;
+    
+    ZeroMemory(&hints, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+    
+    // Resolve the server address and port
+    std::string portStr = std::to_string(serverPort);
+    int getaddrResult = getaddrinfo(serverHost.c_str(), portStr.c_str(), &hints, &addrResult);
+    if (getaddrResult != 0) {
+        std::cerr << "getaddrinfo failed: " << getaddrResult << std::endl;
+        SOCKET_CLEANUP;
+        return INVALID_SOCKET;
+    }
+    
+    // Attempt to connect to the first address returned by getaddrinfo
+    for(ptr = addrResult; ptr != NULL; ptr = ptr->ai_next) {
+        // Create a SOCKET for connecting to server
+        sock = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+        if (sock == INVALID_SOCKET) {
+            std::cerr << "Error creating socket" << std::endl;
+            freeaddrinfo(addrResult);
+            SOCKET_CLEANUP;
+            return INVALID_SOCKET;
+        }
+        
+        // Connect to server
+        if (connect(sock, ptr->ai_addr, (int)ptr->ai_addrlen) == SOCKET_ERROR) {
+            CLOSE_SOCKET(sock);
+            sock = INVALID_SOCKET;
+            continue;
+        }
+        break;
+    }
+    
+    freeaddrinfo(addrResult);
+    
     if (sock == INVALID_SOCKET) {
-        #ifdef _WIN32
-        std::cerr << "Error creating socket: " << WSAGetLastError() << std::endl;
-        WSACleanup();
-        #else
-        std::cerr << "Error creating socket" << std::endl;
-        #endif
-        return INVALID_SOCKET;
-    }
-    
-    // Set up server address
-    struct sockaddr_in serverAddr;
-    ZeroMemory(&serverAddr, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(static_cast<u_short>(serverPort));
-    
-    // Convert IP address from string to binary form
-    if (inet_pton(AF_INET, serverIP.c_str(), &serverAddr.sin_addr) <= 0) {
-        std::cerr << "Invalid server IP address" << std::endl;
-        CLOSE_SOCKET(sock);
+        std::cerr << "Unable to connect to server!" << std::endl;
         SOCKET_CLEANUP;
         return INVALID_SOCKET;
     }
     
-    // Connect to the server
-    if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
-        #ifdef _WIN32
-        std::cerr << "Error connecting to server: " << WSAGetLastError() << std::endl;
-        #else
-        std::cerr << "Error connecting to server" << std::endl;
-        #endif
-        CLOSE_SOCKET(sock);
-        SOCKET_CLEANUP;
-        return INVALID_SOCKET;
-    }
-    
-    log("Connected to server at " + serverIP + ":" + std::to_string(serverPort));
+    log("Connected to server at " + serverHost + ":" + std::to_string(serverPort));
     
     // Send registration message
     std::string registerMsg = "REGISTER";
     if (send(sock, registerMsg.c_str(), registerMsg.length(), 0) == SOCKET_ERROR) {
-        #ifdef _WIN32
-        std::cerr << "Error sending registration message: " << WSAGetLastError() << std::endl;
-        #else
         std::cerr << "Error sending registration message" << std::endl;
-        #endif
         CLOSE_SOCKET(sock);
         SOCKET_CLEANUP;
         return INVALID_SOCKET;
@@ -202,10 +206,15 @@ SOCKET connectToServer(const std::string& serverIP, int serverPort) {
         return INVALID_SOCKET;
     }
     
-    std::string idStr = response.substr(10); // Skip "ASSIGN_ID:"
-    workerId = std::stoi(idStr);
-    
-    log("Registered with server. Assigned worker ID: " + std::to_string(workerId));
+    try {
+        workerId = std::stoi(response.substr(10));
+        log("Assigned worker ID: " + std::to_string(workerId));
+    } catch (const std::exception& e) {
+        std::cerr << "Error parsing worker ID: " << e.what() << std::endl;
+        CLOSE_SOCKET(sock);
+        SOCKET_CLEANUP;
+        return INVALID_SOCKET;
+    }
     
     return sock;
 }
@@ -999,46 +1008,32 @@ std::vector<std::string> find_all_links(const std::string& html, const std::stri
 
 // Entry point
 int main(int argc, char* argv[]) {
-    // Default settings
-    std::string serverIP = "127.0.0.1";
+    // Default server settings
+    std::string serverHost = "distributed-web-scrapper-and-crawler-c.onrender.com";
     int serverPort = 9000;
-    std::string hostname = "books.toscrape.com";
     
     // Parse command line arguments
-    for (int i = 1; i < argc; ++i) {
+    for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        
-        if (arg == "-s" || arg == "--server") {
-            if (i + 1 < argc) {
-                serverIP = argv[++i];
+        if (arg == "--host" && i + 1 < argc) {
+            serverHost = argv[++i];
+        } else if (arg == "--port" && i + 1 < argc) {
+            try {
+                serverPort = std::stoi(argv[++i]);
+            } catch (const std::exception& e) {
+                std::cerr << "Invalid port number" << std::endl;
+                return 1;
             }
         }
-        else if (arg == "-p" || arg == "--port") {
-            if (i + 1 < argc) {
-                try {
-                    serverPort = std::stoi(argv[++i]);
-                } catch (const std::exception& e) {
-                    std::cerr << "Invalid port number" << std::endl;
-                    return 1;
-                }
-            }
-        }
-        else if (arg == "-h" || arg == "--hostname") {
-            if (i + 1 < argc) {
-                hostname = argv[++i];
-            }
-        }
-        else if (arg == "--help") {
-            std::cout << "Worker Usage:" << std::endl;
-            std::cout << "  worker [options]" << std::endl;
-            std::cout << std::endl;
-            std::cout << "Options:" << std::endl;
-            std::cout << "  -s, --server IP      Server IP address (default: 127.0.0.1)" << std::endl;
-            std::cout << "  -p, --port PORT      Server port (default: 9000)" << std::endl;
-            std::cout << "  -h, --hostname HOST  Website hostname (default: books.toscrape.com)" << std::endl;
-            std::cout << "  --help               Show this help message" << std::endl;
-            return 0;
-        }
+    }
+    
+    log("Connecting to server at " + serverHost + ":" + std::to_string(serverPort));
+    
+    // Connect to the server
+    SOCKET serverSocket = connectToServer(serverHost, serverPort);
+    if (serverSocket == INVALID_SOCKET) {
+        std::cerr << "Failed to connect to server" << std::endl;
+        return 1;
     }
     
     // Main worker loop - reconnect if disconnected
@@ -1046,10 +1041,10 @@ int main(int argc, char* argv[]) {
         // Reset the should stop flag before each connection attempt
         shouldStop.store(false);
         
-        log("Connecting to server at " + serverIP + ":" + std::to_string(serverPort));
+        log("Connecting to server at " + serverHost + ":" + std::to_string(serverPort));
         
         // Connect to the server
-        SOCKET serverSocket = connectToServer(serverIP, serverPort);
+        SOCKET serverSocket = connectToServer(serverHost, serverPort);
         if (serverSocket == INVALID_SOCKET) {
             std::cerr << "Failed to connect to server, retrying in 5 seconds..." << std::endl;
             std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -1065,10 +1060,10 @@ int main(int argc, char* argv[]) {
         auto startTime = std::chrono::high_resolution_clock::now();
         
         // Start crawling
-        log("Starting worker for " + hostname + " - getting URLs from server");
+        log("Starting worker for " + serverHost + " - getting URLs from server");
         
         std::vector<Book> books;
-        std::string baseUrl = getBaseUrl(hostname);
+        std::string baseUrl = getBaseUrl(serverHost);
         // Store the base URL as our seed/start URL for reference
         startUrl = baseUrl;
         log("Set seed URL: " + startUrl);
@@ -1125,7 +1120,7 @@ int main(int argc, char* argv[]) {
                 std::string html;
                 std::thread crawlThread([&]() {
                     try {
-                        auto result = crawl_page_with_html(hostname, url);
+                        auto result = crawl_page_with_html(serverHost, url);
                         book = result.first;
                         html = result.second;
                     } catch (const std::exception& e) {
@@ -1170,7 +1165,7 @@ int main(int argc, char* argv[]) {
                 if (!html.empty()) {
                     try {
                         // Extract links from the HTML
-                        links = find_all_links(html, hostname, url);
+                        links = find_all_links(html, serverHost, url);
                     } catch (const std::exception& e) {
                         log("Exception in find_all_links: " + std::string(e.what()));
                         // Continue with empty links
