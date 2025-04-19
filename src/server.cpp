@@ -1310,7 +1310,41 @@ private:
             status += "\"server_status\": \"running\" }";
             response = status;
             contentType = "application/json";
-        } 
+        }
+        else if (request.find("POST /api/seed") != std::string::npos) {
+            // Extract URL from request body
+            size_t bodyStart = request.find("\r\n\r\n");
+            if (bodyStart != std::string::npos) {
+                std::string body = request.substr(bodyStart + 4);
+                std::string url = body;
+                
+                // Set the seed URL
+                if (urlQueueManager) {
+                    urlQueueManager->setSeedUrl(url);
+                    response = "{ \"status\": \"success\", \"message\": \"Seed URL set successfully\" }";
+                } else {
+                    response = "{ \"error\": \"URL queue manager not initialized\" }";
+                    statusCode = 500;
+                }
+            } else {
+                response = "{ \"error\": \"No URL provided in request body\" }";
+                statusCode = 400;
+            }
+            contentType = "application/json";
+        }
+        else if (request.find("POST /api/start") != std::string::npos) {
+            // Start the crawler
+            crawlerEnabled.store(true);
+            if (urlQueueManager) {
+                // Add the seed URL to the queue if it's not already there
+                std::string seedUrl = urlQueueManager->getSeedUrl();
+                if (!seedUrl.empty()) {
+                    urlQueueManager->addSeedUrl(seedUrl);
+                }
+            }
+            response = "{ \"status\": \"success\", \"message\": \"Crawler started successfully\" }";
+            contentType = "application/json";
+        }
         else if (request.find("GET /") != std::string::npos || request.find("GET /index.html") != std::string::npos) {
             // Serve the frontend HTML
             response = getHtmlFrontend();
